@@ -1,10 +1,11 @@
 import boto3
 import csv
+import yaml
 from datetime import datetime
 from botocore.exceptions import ClientError
 
 # North America Regions
-TARGET_REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'ca-central-1']
+TARGET_REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2']
 
 def read_accounts():
     try:
@@ -42,7 +43,11 @@ def discover_resources(region, session=None):
     
     try:
         for page in paginator.paginate():
-            resources.extend(page['ResourceTagMappingList'])
+            # Filter resources that don't have CostCenter tag
+            for resource in page['ResourceTagMappingList']:
+                tags = resource.get('Tags', {})
+                if 'CostCenter' not in tags:
+                    resources.append(resource)
         return resources
     except ClientError as e:
         print(f"Error in region {region}: {str(e)}")
@@ -78,7 +83,7 @@ def main():
         resource_file = f'discovered_resources_{account_name}_{timestamp}.csv'
         results_file = f'tagging_results_{account_name}_{timestamp}.csv'
         
-        print(f"Discovering resources for {account_name}...")
+        print(f"Discovering resources without CostCenter tag for {account_name}...")
         with open(resource_file, 'w', newline='') as f_resources, \
              open(results_file, 'w', newline='') as f_results:
             
@@ -91,11 +96,15 @@ def main():
             for region in TARGET_REGIONS:
                 print(f"\nScanning region: {region}")
                 resources = discover_resources(region, session)
+                if not resources:
+                    print(f"No resources without CostCenter tag found in {region}")
+                    continue
+
                 batch = []
                 
                 for resource in resources:
                     resource_arn = resource['ResourceARN']
-                    print(f"Found resource: {resource_arn}")
+                    print(f"Found resource without CostCenter tag: {resource_arn}")
                     
                     # Write to discovered resources file
                     resource_writer.writerow([
@@ -123,7 +132,7 @@ def main():
                             
                             results_writer.writerow([region, arn, status, error])
                         
-                        batch = []  # Reset batch
+                        batch = [] 
         
         print(f"Complete! Results for {account_name} saved in:")
         print(f"- Resources: {resource_file}")
