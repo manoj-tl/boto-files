@@ -1,24 +1,19 @@
 import boto3
 import csv
-import hcl2
+import yaml
 from datetime import datetime
 from botocore.exceptions import ClientError
 
-# Add ignore_accounts list
-IGNORE_ACCOUNTS = ['Root', 'Compliance']
-
 def read_accounts():
     try:
-        with open('locals.tf', 'r') as file:
-            parsed_hcl = hcl2.load(file)
-            accounts = parsed_hcl['locals'][0]['account_ids']
-            return {k: v for k, v in accounts.items() if k not in IGNORE_ACCOUNTS}
+        with open('accounts.yaml', 'r') as file:
+            return yaml.safe_load(file)
     except Exception as e:
-        print(f"Error reading .tf file: {str(e)}")
+        print(f"Error reading YAML file: {str(e)}")
         return {}
 
 def assume_role(account_id):
-    role_arn = f'arn:aws:iam::{account_id}:role/{account_id}-Devops-Admin-Role'
+    role_arn = f'arn:aws:iam::{account_id}:role/Devops-Admin-Role'
     sts_client = boto3.client('sts')
     try:
         response = sts_client.assume_role(
@@ -72,13 +67,6 @@ def tag_resource(resource_arn, region, session=None):
 
 def main():
     accounts = read_accounts()
-    if not accounts:
-        print("No eligible accounts found or error reading accounts.")
-        return
-
-    print(f"Ignoring accounts: {IGNORE_ACCOUNTS}")
-    print(f"Processing accounts: {list(accounts.keys())}")
-    
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     for account_name, account_id in accounts.items():
@@ -92,12 +80,9 @@ def main():
         
         # Files for logging (per account)
         resource_file = f'discovered_resources_{account_name}_{timestamp}.csv'
-        results_file = f'tagging_results_{account_name}_{timestamp}.csv'
         
         # Discover and list resources
-        with open(resource_file, 'w', newline='') as f_resources, open(results_file, 'w', newline='') as f_results:
-            results_writer = csv.writer(f_results)
-            results_writer.writerow(['Region', 'ResourceARN', 'Status', 'Error'])
+        print(f"Discovering resources for {account_name}...")
         with open(resource_file, 'w', newline='') as f_resources:
             resource_writer = csv.writer(f_resources)
             resource_writer.writerow(['Region', 'ResourceARN', 'Current Tags'])
@@ -118,11 +103,13 @@ def main():
                         str(resource.get('Tags', {}))
                     ])
                     
+                    # Tagging part commented out
+                    '''
                     # Immediately tag the resource
-                    tag_response = tag_resource(resource_arn, region, session)
-                    if tag_response:
+                    failed = tag_resource(resource_arn, region, session)
+                    if failed:
                         status = 'Failed'
-                        error = tag_response.get(resource_arn, 'Unknown error')
+                        error = failed.get(resource_arn, 'Unknown error')
                         print(f"✗ Failed to tag: {resource_arn} - {error}")
                     else:
                         status = 'Success'
@@ -131,7 +118,7 @@ def main():
                     
                     # Write results
                     results_writer.writerow([region, resource_arn, status, error])
-               
+                    '''
         
         print(f"Complete! Resources for {account_name} saved in {resource_file}")
 
