@@ -1,15 +1,19 @@
 import boto3
 import csv
-import yaml
+import hcl2
 from datetime import datetime
 from botocore.exceptions import ClientError
 
+
+TARGET_REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1']
+
 def read_accounts():
     try:
-        with open('accounts.yaml', 'r') as file:
-            return yaml.safe_load(file)
+        with open('locals.tf', 'r') as file:
+            parsed_hcl = hcl2.load(file)
+            return parsed_hcl['locals'][0]['account_ids']
     except Exception as e:
-        print(f"Error reading YAML file: {str(e)}")
+        print(f"Error reading locals.tf file: {str(e)}")
         return {}
 
 def assume_role(account_id):
@@ -28,10 +32,6 @@ def assume_role(account_id):
     except Exception as e:
         print(f"Error assuming role for account {account_id}: {str(e)}")
         return None
-
-def get_regions():
-    ec2 = boto3.client('ec2', region_name='us-east-1')
-    return [region['RegionName'] for region in ec2.describe_regions()['Regions']]
 
 def discover_resources(region, session=None):
     if session:
@@ -80,15 +80,20 @@ def main():
         
         # Files for logging (per account)
         resource_file = f'discovered_resources_{account_name}_{timestamp}.csv'
+        results_file = f'tagging_results_{account_name}_{timestamp}.csv'
         
         # Discover and list resources
         print(f"Discovering resources for {account_name}...")
-        with open(resource_file, 'w', newline='') as f_resources:
-            resource_writer = csv.writer(f_resources)
-            resource_writer.writerow(['Region', 'ResourceARN', 'Current Tags'])
+        with open(resource_file, 'w', newline='') as f_resources, \
+             open(results_file, 'w', newline='') as f_results:
             
-            regions = get_regions()
-            for region in regions:
+            resource_writer = csv.writer(f_resources)
+            results_writer = csv.writer(f_results)
+            
+            resource_writer.writerow(['Region', 'ResourceARN', 'Current Tags'])
+            results_writer.writerow(['Region', 'ResourceARN', 'Status', 'Error'])
+            
+            for region in TARGET_REGIONS:
                 print(f"\nScanning region: {region}")
                 resources = discover_resources(region, session)
                 
@@ -103,13 +108,11 @@ def main():
                         str(resource.get('Tags', {}))
                     ])
                     
-                    # Tagging part commented out
-                    '''
-                    # Immediately tag the resource
-                    failed = tag_resource(resource_arn, region, session)
-                    if failed:
+                    # Tag the resource
+                    tag_response = tag_resource(resource_arn, region, session)
+                    if tag_response:
                         status = 'Failed'
-                        error = failed.get(resource_arn, 'Unknown error')
+                        error = tag_response.get(resource_arn, 'Unknown error')
                         print(f"✗ Failed to tag: {resource_arn} - {error}")
                     else:
                         status = 'Success'
@@ -118,9 +121,10 @@ def main():
                     
                     # Write results
                     results_writer.writerow([region, resource_arn, status, error])
-                    '''
         
-        print(f"Complete! Resources for {account_name} saved in {resource_file}")
+        print(f"Complete! Results for {account_name} saved in:")
+        print(f"- Resources: {resource_file}")
+        print(f"- Tagging Results: {results_file}")
 
 if __name__ == "__main__":
     main()
