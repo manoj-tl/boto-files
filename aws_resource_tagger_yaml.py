@@ -1,19 +1,17 @@
 import boto3
 import csv
-import hcl2
 from datetime import datetime
 from botocore.exceptions import ClientError
 
-
-TARGET_REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1']
+# North America Regions
+TARGET_REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'ca-central-1']
 
 def read_accounts():
     try:
-        with open('locals.tf', 'r') as file:
-            parsed_hcl = hcl2.load(file)
-            return parsed_hcl['locals'][0]['account_ids']
+        with open('accounts.yaml', 'r') as file:
+            return yaml.safe_load(file)
     except Exception as e:
-        print(f"Error reading locals.tf file: {str(e)}")
+        print(f"Error reading YAML file: {str(e)}")
         return {}
 
 def assume_role(account_id):
@@ -50,7 +48,7 @@ def discover_resources(region, session=None):
         print(f"Error in region {region}: {str(e)}")
         return []
 
-def tag_resource(resource_arn, region, session=None):
+def tag_resources_batch(resource_arns, region, session=None):
     if session:
         client = session.client('resourcegroupstaggingapi', region_name=region)
     else:
@@ -58,12 +56,12 @@ def tag_resource(resource_arn, region, session=None):
     
     try:
         response = client.tag_resources(
-            ResourceARNList=[resource_arn],
+            ResourceARNList=resource_arns,
             Tags={'CostCenter': 'your-cost-center-here'}
         )
         return response['FailedResourcesMap']
     except ClientError as e:
-        return {resource_arn: str(e)}
+        return {arn: str(e) for arn in resource_arns}
 
 def main():
     accounts = read_accounts()
@@ -72,17 +70,14 @@ def main():
     for account_name, account_id in accounts.items():
         print(f"\nProcessing account: {account_name} ({account_id})")
         
-        # Assume role for the account
         session = assume_role(account_id)
         if not session:
             print(f"Skipping account {account_name} due to role assumption failure")
             continue
         
-        # Files for logging (per account)
         resource_file = f'discovered_resources_{account_name}_{timestamp}.csv'
         results_file = f'tagging_results_{account_name}_{timestamp}.csv'
         
-        # Discover and list resources
         print(f"Discovering resources for {account_name}...")
         with open(resource_file, 'w', newline='') as f_resources, \
              open(results_file, 'w', newline='') as f_results:
@@ -96,6 +91,7 @@ def main():
             for region in TARGET_REGIONS:
                 print(f"\nScanning region: {region}")
                 resources = discover_resources(region, session)
+                batch = []
                 
                 for resource in resources:
                     resource_arn = resource['ResourceARN']
@@ -108,19 +104,26 @@ def main():
                         str(resource.get('Tags', {}))
                     ])
                     
-                    # Tag the resource
-                    tag_response = tag_resource(resource_arn, region, session)
-                    if tag_response:
-                        status = 'Failed'
-                        error = tag_response.get(resource_arn, 'Unknown error')
-                        print(f"✗ Failed to tag: {resource_arn} - {error}")
-                    else:
-                        status = 'Success'
-                        error = ''
-                        print(f"✓ Successfully tagged: {resource_arn}")
+                    batch.append(resource_arn)
                     
-                    # Write results
-                    results_writer.writerow([region, resource_arn, status, error])
+                    # Process batch when it reaches size 20 or last resource
+                    if len(batch) == 20 or resource == resources[-1]:
+                        failed_resources = tag_resources_batch(batch, region, session)
+                        
+                        # Write results for the batch
+                        for arn in batch:
+                            if arn in failed_resources:
+                                status = 'Failed'
+                                error = failed_resources.get(arn, 'Unknown error')
+                                print(f"✗ Failed to tag: {arn} - {error}")
+                            else:
+                                status = 'Success'
+                                error = ''
+                                print(f"✓ Successfully tagged: {arn}")
+                            
+                            results_writer.writerow([region, arn, status, error])
+                        
+                        batch = []  # Reset batch
         
         print(f"Complete! Results for {account_name} saved in:")
         print(f"- Resources: {resource_file}")
