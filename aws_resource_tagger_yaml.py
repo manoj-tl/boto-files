@@ -42,12 +42,36 @@ def discover_resources(region, session=None):
     paginator = client.get_paginator('get_resources')
     
     try:
-        for page in paginator.paginate():
-            # Filter resources that don't have CostString tag
+        # Get resources including those with no tags
+        for page in paginator.paginate(
+            ResourcesPerPage=100,
+            IncludeComplianceDetails=True,
+            ExcludeCompliantResources=False,
+            ResourceTypeFilters=[]
+        ):
             for resource in page['ResourceTagMappingList']:
-                tags = resource.get('Tags', {})
-                if 'CostString' not in tags:
+                # Check if resource has any tags
+                if not resource.get('Tags'):
                     resources.append(resource)
+                    print(f"Found completely untagged resource: {resource['ResourceARN']}")
+                    continue
+                
+                # Check for CostString tag
+                has_coststring = False
+                for tag in resource.get('Tags', []):
+                    if tag.get('Key', '').lower() == 'coststring':
+                        has_coststring = True
+                        print(f"Skipping resource with CostString tag: {resource['ResourceARN']}")
+                        break
+                
+                if not has_coststring:
+                    resources.append(resource)
+                    print(f"No CostString tag found for: {resource['ResourceARN']}")
+        
+        print(f"Total resources found in {region}: {len(resources)}")
+        print(f"- Untagged resources: {sum(1 for r in resources if not r.get('Tags'))}")
+        print(f"- Resources without CostString: {sum(1 for r in resources if r.get('Tags'))}")
+        
         return resources
     except ClientError as e:
         print(f"Error in region {region}: {str(e)}")
@@ -62,7 +86,7 @@ def tag_resources_batch(resource_arns, region, session=None):
     try:
         response = client.tag_resources(
             ResourceARNList=resource_arns,
-            Tags={'CostString': 'your-cost-center-here'}
+            Tags={'CostCenter': 'your-cost-center-here'}
         )
         return response['FailedResourcesMap']
     except ClientError as e:
@@ -83,7 +107,7 @@ def main():
         resource_file = f'discovered_resources_{account_name}_{timestamp}.csv'
         results_file = f'tagging_results_{account_name}_{timestamp}.csv'
         
-        print(f"Discovering resources without CostString tag for {account_name}...")
+        print(f"Discovering resources without CostCenter tag for {account_name}...")
         with open(resource_file, 'w', newline='') as f_resources, \
              open(results_file, 'w', newline='') as f_results:
             
@@ -97,14 +121,14 @@ def main():
                 print(f"\nScanning region: {region}")
                 resources = discover_resources(region, session)
                 if not resources:
-                    print(f"No resources without CostString tag found in {region}")
+                    print(f"No resources without CostCenter tag found in {region}")
                     continue
 
                 batch = []
                 
                 for resource in resources:
                     resource_arn = resource['ResourceARN']
-                    print(f"Found resource without CostString tag: {resource_arn}")
+                    print(f"Found resource without CostCenter tag: {resource_arn}")
                     
                     # Write to discovered resources file
                     resource_writer.writerow([
