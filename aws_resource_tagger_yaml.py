@@ -43,10 +43,10 @@ def discover_resources(region, session=None):
     
     try:
         for page in paginator.paginate():
-            # Filter resources that don't have CostCenter tag
+            # Filter resources that don't have CostString tag
             for resource in page['ResourceTagMappingList']:
                 tags = resource.get('Tags', {})
-                if 'CostCenter' not in tags:
+                if 'CostString' not in tags:
                     resources.append(resource)
         return resources
     except ClientError as e:
@@ -62,7 +62,7 @@ def tag_resources_batch(resource_arns, region, session=None):
     try:
         response = client.tag_resources(
             ResourceARNList=resource_arns,
-            Tags={'CostCenter': 'your-cost-center-here'}
+            Tags={'CostString': 'your-cost-center-here'}
         )
         return response['FailedResourcesMap']
     except ClientError as e:
@@ -83,7 +83,7 @@ def main():
         resource_file = f'discovered_resources_{account_name}_{timestamp}.csv'
         results_file = f'tagging_results_{account_name}_{timestamp}.csv'
         
-        print(f"Discovering resources without CostCenter tag for {account_name}...")
+        print(f"Discovering resources without CostString tag for {account_name}...")
         with open(resource_file, 'w', newline='') as f_resources, \
              open(results_file, 'w', newline='') as f_results:
             
@@ -97,14 +97,14 @@ def main():
                 print(f"\nScanning region: {region}")
                 resources = discover_resources(region, session)
                 if not resources:
-                    print(f"No resources without CostCenter tag found in {region}")
+                    print(f"No resources without CostString tag found in {region}")
                     continue
 
                 batch = []
                 
                 for resource in resources:
                     resource_arn = resource['ResourceARN']
-                    print(f"Found resource without CostCenter tag: {resource_arn}")
+                    print(f"Found resource without CostString tag: {resource_arn}")
                     
                     # Write to discovered resources file
                     resource_writer.writerow([
