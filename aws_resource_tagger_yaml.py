@@ -4,7 +4,12 @@ import yaml
 from datetime import datetime
 from botocore.exceptions import ClientError
 
-# North America Regions
+'''
+Script will update "CostStrig" tag for the resources that doesn't have CostString atached. 
+It loops thru multiple accounts by checking the accounts.yaml file in path of the script
+Example accounts.yaml:
+'''
+
 TARGET_REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2']
 
 def read_accounts():
@@ -16,7 +21,7 @@ def read_accounts():
         return {}
 
 def assume_role(account_id):
-    role_arn = f'arn:aws:iam::{account_id}:role/Devops-Admin-Role'
+    role_arn = f'arn:aws:iam::{account_id}:role/{account_id}-Devops-Admin-Role'
     sts_client = boto3.client('sts')
     try:
         response = sts_client.assume_role(
@@ -46,13 +51,12 @@ def discover_resources(region, session=None):
         for page in paginator.paginate(
             ResourcesPerPage=100,
             IncludeComplianceDetails=True,
-            ExcludeCompliantResources=False,
             ResourceTypeFilters=[]
         ):
             for resource in page['ResourceTagMappingList']:
                 # Check if resource has any tags
                 if not resource.get('Tags'):
-                    resources.append(resource)
+                    # resources.append(resource)
                     print(f"Found completely untagged resource: {resource['ResourceARN']}")
                     continue
                 
@@ -61,7 +65,8 @@ def discover_resources(region, session=None):
                 for tag in resource.get('Tags', []):
                     if tag.get('Key', '').lower() == 'coststring':
                         has_coststring = True
-                        print(f"Skipping resource with CostString tag: {resource['ResourceARN']}")
+                        resources.append(resource)
+                        print(f"Resource with Old CostString tag: {resource['ResourceARN']}")
                         break
                 
                 if not has_coststring:
@@ -77,7 +82,8 @@ def discover_resources(region, session=None):
         print(f"Error in region {region}: {str(e)}")
         return []
 
-def tag_resources_batch(resource_arns, region, session=None):
+
+def tag_resources(resource_arns, region, session=None):
     if session:
         client = session.client('resourcegroupstaggingapi', region_name=region)
     else:
@@ -86,7 +92,7 @@ def tag_resources_batch(resource_arns, region, session=None):
     try:
         response = client.tag_resources(
             ResourceARNList=resource_arns,
-            Tags={'CostCenter': 'your-cost-center-here'}
+            Tags={'CostString': '1100.us.624.402026.66004000'}
         )
         return response['FailedResourcesMap']
     except ClientError as e:
@@ -104,10 +110,10 @@ def main():
             print(f"Skipping account {account_name} due to role assumption failure")
             continue
         
-        resource_file = f'discovered_resources_{account_name}_{timestamp}.csv'
-        results_file = f'tagging_results_{account_name}_{timestamp}.csv'
+        resource_file = f'discovered_resources_{account_id}_{timestamp}.csv'
+        results_file = f'tagging_results_{account_id}_{timestamp}.csv'
         
-        print(f"Discovering resources without CostCenter tag for {account_name}...")
+        print(f"Discovering resources without CostString tag for {account_name}...")
         with open(resource_file, 'w', newline='') as f_resources, \
              open(results_file, 'w', newline='') as f_results:
             
@@ -121,14 +127,14 @@ def main():
                 print(f"\nScanning region: {region}")
                 resources = discover_resources(region, session)
                 if not resources:
-                    print(f"No resources without CostCenter tag found in {region}")
+                    print(f"No resources without CostString tag found in {region}")
                     continue
 
                 batch = []
                 
                 for resource in resources:
                     resource_arn = resource['ResourceARN']
-                    print(f"Found resource without CostCenter tag: {resource_arn}")
+                    print(f"Found resource without CostString tag: {resource_arn}")
                     
                     # Write to discovered resources file
                     resource_writer.writerow([
@@ -139,20 +145,20 @@ def main():
                     
                     batch.append(resource_arn)
                     
-                    # Process batch when it reaches size 20 or last resource
+                    # Updates in batch of 20 resources to run faster
                     if len(batch) == 20 or resource == resources[-1]:
-                        failed_resources = tag_resources_batch(batch, region, session)
+                        tagging_resources = tag_resources(batch, region, session)
                         
                         # Write results for the batch
                         for arn in batch:
-                            if arn in failed_resources:
+                            if arn in tagging_resources:
                                 status = 'Failed'
-                                error = failed_resources.get(arn, 'Unknown error')
-                                print(f"✗ Failed to tag: {arn} - {error}")
+                                error = tagging_resources.get(arn, 'Unknown error')
+                                print(f"Failed to tag: {arn} - {error}")
                             else:
                                 status = 'Success'
                                 error = ''
-                                print(f"✓ Successfully tagged: {arn}")
+                                print(f"Successfully tagged: {arn}")
                             
                             results_writer.writerow([region, arn, status, error])
                         
