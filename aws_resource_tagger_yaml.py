@@ -1,6 +1,7 @@
 import boto3
 import csv
 import yaml
+import time
 from datetime import datetime
 from botocore.exceptions import ClientError
 
@@ -11,6 +12,8 @@ Example accounts.yaml:
 '''
 
 TARGET_REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2']
+MAX_RETRIES = 3
+RETRY_DELAY = 10 
 
 def read_accounts():
     try:
@@ -65,9 +68,11 @@ def discover_resources(region, session=None):
                 for tag in resource.get('Tags', []):
                     if tag.get('Key', '').lower() == 'coststring':
                         has_coststring = True
-                        resources.append(resource)
-                        print(f"Resource with Old CostString tag: {resource['ResourceARN']}")
+                        if tag.get('Value') == 'XYZ':
+                            resources.append(resource)
+                            print(f"Resource with Old CostString tag: {resource['ResourceARN']}")
                         break
+
                 
                 if not has_coststring:
                     resources.append(resource)
@@ -83,7 +88,7 @@ def discover_resources(region, session=None):
         return []
 
 
-def tag_resources(resource_arns, region, session=None):
+def tag_resources(resource_arns, region, session=None, retry_count=0):
     if session:
         client = session.client('resourcegroupstaggingapi', region_name=region)
     else:
@@ -94,7 +99,15 @@ def tag_resources(resource_arns, region, session=None):
             ResourceARNList=resource_arns,
             Tags={'CostString': '1100.us.624.402026.66004000'}
         )
-        return response['FailedResourcesMap']
+        failed_resources = response['FailedResourcesMap']
+        
+        if failed_resources and retry_count < MAX_RETRIES:
+            if any('LimitExceeded' in str(error) for error in failed_resources.values()):
+                print(f"Rate limit exceeded. Waiting {RETRY_DELAY} seconds before retry {retry_count + 1}/{MAX_RETRIES}")
+                time.sleep(RETRY_DELAY)
+                return tag_resources(list(failed_resources.keys()), region, session, retry_count + 1)
+        
+        return failed_resources
     except ClientError as e:
         return {arn: str(e) for arn in resource_arns}
 
@@ -110,18 +123,23 @@ def main():
             print(f"Skipping account {account_name} due to role assumption failure")
             continue
         
-        resource_file = f'discovered_resources_{account_id}_{timestamp}.csv'
-        results_file = f'tagging_results_{account_id}_{timestamp}.csv'
+        # resource_file = f'discovered_resources_{account_id}_{timestamp}.csv'
+        # results_file = f'tagging_results_{account_id}_{timestamp}.csv'
+        failed_file = f'failed_resources_{account_id}_{timestamp}.csv'
         
         print(f"Discovering resources without CostString tag for {account_name}...")
-        with open(resource_file, 'w', newline='') as f_resources, \
-             open(results_file, 'w', newline='') as f_results:
+        # with open(resource_file, 'w', newline='') as f_resources, \
+        #      open(results_file, 'w', newline='') as f_results, \
+        #      open(failed_file, 'w', newline='') as f_failed:
+        with open(failed_file, 'w', newline='') as f_failed:    
             
-            resource_writer = csv.writer(f_resources)
-            results_writer = csv.writer(f_results)
+            # resource_writer = csv.writer(f_resources)
+            # results_writer = csv.writer(f_results)
+            failed_writer = csv.writer(f_failed)
             
-            resource_writer.writerow(['Region', 'ResourceARN', 'Current Tags'])
-            results_writer.writerow(['Region', 'ResourceARN', 'Status', 'Error'])
+            # resource_writer.writerow(['Region', 'ResourceARN', 'Current Tags'])
+            # results_writer.writerow(['Region', 'ResourceARN', 'Status', 'Error'])
+            failed_writer.writerow(['Region', 'ResourceARN', 'Error', 'Retries'])
             
             for region in TARGET_REGIONS:
                 print(f"\nScanning region: {region}")
@@ -137,11 +155,11 @@ def main():
                     print(f"Found resource without CostString tag: {resource_arn}")
                     
                     # Write to discovered resources file
-                    resource_writer.writerow([
-                        region,
-                        resource_arn,
-                        str(resource.get('Tags', {}))
-                    ])
+                    # resource_writer.writerow([
+                    #     region,
+                    #     resource_arn,
+                    #     str(resource.get('Tags', {}))
+                    # ])
                     
                     batch.append(resource_arn)
                     
@@ -155,18 +173,20 @@ def main():
                                 status = 'Failed'
                                 error = tagging_resources.get(arn, 'Unknown error')
                                 print(f"Failed to tag: {arn} - {error}")
+                                failed_writer.writerow([region, arn, error, MAX_RETRIES])
                             else:
                                 status = 'Success'
                                 error = ''
                                 print(f"Successfully tagged: {arn}")
                             
-                            results_writer.writerow([region, arn, status, error])
+                            # results_writer.writerow([region, arn, status, error])
                         
                         batch = [] 
         
-        print(f"Complete! Results for {account_name} saved in:")
-        print(f"- Resources: {resource_file}")
-        print(f"- Tagging Results: {results_file}")
+        # print(f"Complete! Results for {account_name} saved in:")
+        # print(f"- Resources: {resource_file}")
+        # print(f"- Tagging Results: {results_file}")
+        # print(f"- Failed Resources: {failed_file}")
 
 if __name__ == "__main__":
     main()
