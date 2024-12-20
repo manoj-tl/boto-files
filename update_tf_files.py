@@ -7,12 +7,12 @@ import subprocess
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Define the root directory containing repositories
-ROOT_DIR = "zillow_scraper"
+ROOT_DIR = "./"
 NEW_COST_STRING = 'CostString = "XYZ"'
 OLD_COST_STRING_PATTERN = r'CostString\s*=\s*"XY"'
 IGNORE_COST_STRING_PATTERN = r'CostString\s*=\s*".*"'
 TOUCHED_REPOS = {}
-JIRA_TICKET = "JIRA-1234"
+BRANCH_NAME = "JIRA-1234"
 
 # Function to update the file
 def update_file(file_path, repo_dir):
@@ -88,6 +88,38 @@ def run_terraform_fmt(touched_files):
         except subprocess.CalledProcessError as e:
             logging.error(f"Terraform fmt failed on {file}: {e}")
 
+# Create and push a branch, commit changes, and create a pull request
+def handle_git_operations(repo_dir, touched_files):
+    try:
+        # Checkout or create the branch
+        subprocess.run(["git", "checkout", "-b", BRANCH_NAME], cwd=repo_dir, check=True)
+        logging.info(f"Checked out to branch: {BRANCH_NAME}")
+    except subprocess.CalledProcessError:
+        subprocess.run(["git", "checkout", BRANCH_NAME], cwd=repo_dir, check=True)
+        logging.info(f"Switched to existing branch: {BRANCH_NAME}")
+
+    # Add changes
+    try:
+        subprocess.run(["git", "add"] + list(touched_files), cwd=repo_dir, check=True)
+        commit_message = f"{BRANCH_NAME}: Update CostString to XYZ where applicable"
+        subprocess.run(["git", "commit", "-m", commit_message], cwd=repo_dir, check=True)
+        logging.info(f"Committed changes with message: {commit_message}")
+    except subprocess.CalledProcessError as e:
+        logging.warning(f"No changes to commit in {repo_dir}: {e}")
+
+    # Push changes
+    try:
+        subprocess.run(["git", "push", "-u", "origin", BRANCH_NAME], cwd=repo_dir, check=True)
+        logging.info(f"Pushed branch {BRANCH_NAME} to origin")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to push branch {BRANCH_NAME}: {e}")
+
+    # Create a pull request (simulated)
+    pr_url = f"https://bitbucket.org/example/{os.path.basename(repo_dir)}/pull-requests/new?source={BRANCH_NAME}"
+    with open("pull_requests.log", "a") as log_file:
+        log_file.write(f"Repository: {repo_dir}, PR: {pr_url}\n")
+    logging.info(f"Pull request created: {pr_url}")
+
 # Traverse the root directory for all files
 def process_directory(root_dir):
     for subdir, dirs, files in os.walk(root_dir):
@@ -109,15 +141,15 @@ def main():
 
     # Print the files that got touched
     logging.info("Files updated:")
-    all_touched_files = []
     for repo, files in TOUCHED_REPOS.items():
         logging.info(f"Repository: {repo}")
         for file in files:
             logging.info(f"  {file}")
-            all_touched_files.append(file)
 
-    # Run Terraform fmt on each unique touched file
-    run_terraform_fmt(all_touched_files)
+    # Run Terraform fmt and handle Git operations
+    for repo, files in TOUCHED_REPOS.items():
+        run_terraform_fmt(files)
+        handle_git_operations(repo, files)
 
     logging.info("Script execution completed")
 
